@@ -39,3 +39,10 @@ La vérification retélécharge le contenu depuis la gateway et recalcule le has
 - `ANCHOR_WALLET` (clé locale Solana)
 - `PUBLISH_RETRY_MAX` (défaut 5)
 - `PUBLISH_BACKOFF_MS` (défaut 800)
+
+## Intégrité & Fiabilité
+- Hash = SHA-256 des **octets uploadés** (vérifié via gateway Pinata).
+- Fallback gateways: Pinata → ipfs.io → Cloudflare.
+- Retry/backoff exponentiel sur upload IPFS et émission tx.
+- Journal CSV `runs/devnet_YYYY-MM-DD.csv` avec `{file,cid,sha256,tx,ts}`.
+- Commande sûre: `npm run publish_safe`.
