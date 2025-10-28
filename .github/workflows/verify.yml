@@ -1,0 +1,19 @@
+name: Verify latest batch
+on: [push]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci || npm i
+      - name: Verify today CSV if present
+        run: |
+          FILE="runs/devnet_$(date -u +%F).csv"
+          if [ -f "$FILE" ]; then
+            npm run verify
+          else
+            echo "No CSV for today. Skipping."
+          fi
