@@ -26,3 +26,16 @@ La vérification retélécharge via passerelles IPFS et recalcule le hash pour g
 ## Intégrité des lots
 Le SHA-256 enregistré dans `runs/devnet_YYYY-MM-DD.csv` est calculé sur **les octets exacts** envoyés à IPFS.  
 La vérification retélécharge le contenu depuis la gateway et recalcule le hash. Si différent ⇒ échec.
+
+## Intégrité et robustesse
+- Hash d’intégrité = SHA-256 des *octets envoyés*.
+- Upload IPFS via Pinata avec **retry/backoff** exponentiel.
+- Vérification byte-par-byte via gateway Pinata, fallback géré côté outil `verify`.
+- Journal CSV: `runs/devnet_YYYY-MM-DD.csv` → `file,cid,sha256,tx,ts`.
+
+### Variables utiles
+- `PINATA_JWT` (obligatoire)
+- `ANCHOR_PROVIDER_URL` (par défaut: devnet)
+- `ANCHOR_WALLET` (clé locale Solana)
+- `PUBLISH_RETRY_MAX` (défaut 5)
+- `PUBLISH_BACKOFF_MS` (défaut 800)
