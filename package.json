@@ -1,1 +1,19 @@
-{"name":"wakama-oracle-publisher","private":true,"type":"module","scripts":{"start":"node src/publish.js","verify":"node src/verify.cjs"},"dependencies":{"@pinata/sdk":"^2.1.0","@solana/web3.js":"^1.98.4","dotenv":"^17.2.3","fast-csv":"^5.0.5","fs-extra":"^11.2.0"}}
+{
+  "name": "wakama-oracle-publisher",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/publish.js",
+    "verify": "node src/verify.cjs",
+    "publish_safe": "node src/publish.cjs && npm run export_now",
+    "publish_sim": "node src/publish.cjs --sim && npm run export_now",
+    "export_now": "node tools/build-now.cjs receipts ../wakama-dashboard/public/now.json"
+  },
+  "dependencies": {
+    "@pinata/sdk": "^2.1.0",
+    "@solana/web3.js": "^1.98.4",
+    "dotenv": "^17.2.3",
+    "fast-csv": "^5.0.5",
+    "fs-extra": "^11.2.0"
+  }
+}

@@ -1,0 +1,118 @@
+const fs = require('fs');
+const crypto = require('crypto');
+const { execSync } = require('child_process');
+const path = require('path');
+
+// ---- Config retry/backoff ----
+const MAX_RETRY = parseInt(process.env.PUBLISH_RETRY_MAX || '5', 10);
+const BASE_MS   = parseInt(process.env.PUBLISH_BACKOFF_MS || '800', 10);
+
+// ---- Inputs ----
+const { PINATA_API_KEY, PINATA_API_SECRET } = process.env;
+const RPC        = process.env.ANCHOR_PROVIDER_URL || 'https://api.devnet.solana.com';
+const WALLET     = process.env.ANCHOR_WALLET || (process.env.HOME + '/.config/solana/id.json');
+const SELF       = JSON.parse(fs.readFileSync(WALLET, 'utf8'))[0]?.pubkey || execSync('solana address').toString().trim();
+
+// Lot à publier: arg chemin direct, sinon dernier du dossier ingest/batches
+function newestBatch() {
+  const ingestDir = process.env.INGEST_DIR || path.join(process.env.HOME, 'dev/wakama/wakama-oracle-ingest');
+  const dir = path.join(ingestDir, 'batches');
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort();
+  if (!files.length) throw new Error('no batch json in ' + dir);
+  return path.join(dir, files[files.length - 1]);
+}
+const PATH_JSON = process.argv[2] || newestBatch();
+const FNAME = path.basename(PATH_JSON);
+
+// ---- Helpers ----
+function sha256File(p) {
+  const h = crypto.createHash('sha256');
+  h.update(fs.readFileSync(p));
+  return h.digest('hex');
+}
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+function jitter(ms){ return Math.floor(ms * (0.8 + Math.random()*0.4)); }
+
+function curlJson(cmd) {
+  const out = execSync(cmd, {stdio:['ignore','pipe','pipe']}).toString();
+  return JSON.parse(out);
+}
+function shaFromGateway(cid, gw) {
+  const cmd = `curl -sL "${gw}/${cid}" | sha256sum | awk '{print $1}'`;
+  return execSync(cmd, {shell:'/bin/bash'}).toString().trim();
+}
+
+// ---- Retry wrappers ----
+async function withRetry(name, fn) {
+  let err;
+  for (let i=0;i<MAX_RETRY;i++){
+    try { return await fn(); } catch(e){
+      err = e;
+      const wait = jitter(BASE_MS * Math.pow(2, i));
+      console.error(`${name}: attempt ${i+1}/${MAX_RETRY} failed: ${e.message || e}. backoff ${wait}ms`);
+      await sleep(wait);
+    }
+  }
+  throw new Error(`${name}: failed after ${MAX_RETRY} attempts: ${err && err.message || err}`);
+}
+
+// ---- Upload to Pinata with retry ----
+async function uploadPinata(filePath, fname) {
+  if (!PINATA_JWT) throw new Error('PINATA_JWT missing');
+  return withRetry('pinFileToIPFS', () => {
+    const cmd = [
+      'curl -sS -X POST "https://api.pinata.cloud/pinning/pinFileToIPFS"',
+      `-H "pinata_api_key: ${PINATA_API_KEY}"`, `-H "pinata_secret_api_key: ${PINATA_API_SECRET}"`,
+      `-F "file=@${filePath};filename=${fname}"`
+    ].join(' ');
+    const j = curlJson(cmd);
+    if (!j.IpfsHash) throw new Error('Pinata response missing CID');
+    return j.IpfsHash;
+  });
+}
+
+// ---- Emit tx with retry (Memo) ----
+async function emitTxMemo(memo) {
+  const cmd = `solana transfer "${SELF}" 0 --url ${RPC} --with-memo '${memo}' --allow-unfunded-recipient --no-wait`;
+  return withRetry('solana-memo', () => {
+    const out = execSync(cmd, {stdio:['ignore','pipe','pipe']}).toString().trim();
+    return out.split(/\s+/).pop(); // tx sig
+  });
+}
+
+// ---- Main ----
+(async () => {
+  const shaLocal = sha256File(PATH_JSON);
+
+  // 1) Upload
+  const cid = await uploadPinata(PATH_JSON, FNAME);
+
+  // 2) Integrity: byte-for-byte via gateway
+  const gw = 'https://gateway.pinata.cloud/ipfs';
+  const shaGw = shaFromGateway(cid, gw);
+  if (shaGw !== shaLocal) throw new Error('sha mismatch gateway vs local');
+
+  // 3) Emit tx with memo {cid,sha256,count,ts_min,ts_max}
+  const batch = JSON.parse(fs.readFileSync(PATH_JSON, 'utf8'));
+  const payload = {
+    cid,
+    sha256: shaLocal,
+    count: batch.count || (batch.measures ? batch.measures.length : undefined),
+    ts_min: batch.ts_min,
+    ts_max: batch.ts_max
+  };
+  const memo = JSON.stringify(payload);
+  const tx = await emitTxMemo(memo);
+
+  // 4) Log CSV
+  const day = new Date().toISOString().slice(0,10);
+  fs.mkdirSync('runs', {recursive: true});
+  fs.appendFileSync(`runs/devnet_${day}.csv`,
+    `${FNAME},${cid},${shaLocal},${tx},${new Date().toISOString()}\n`
+  );
+
+  console.log(JSON.stringify({ok:true,file:FNAME,cid,sha256:shaLocal,tx,gw}));
+})().catch(e=>{
+  console.error(e.message || e);
+  process.exit(1);
+});
