@@ -7,6 +7,9 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const path = require('path');
 
+const TEAM_ID = process.env.TEAM_ID || '';
+const TEAM_NAME = process.env.TEAM_NAME || TEAM_ID || 'unknown';
+
 // ---- Config retry/backoff ----
 const MAX_RETRY = parseInt(process.env.PUBLISH_RETRY_MAX || '5', 10);
 const BASE_MS = parseInt(process.env.PUBLISH_BACKOFF_MS || '800', 10);
@@ -48,9 +51,7 @@ const GW = (
 // identité locale
 const SELF = (() => {
   try {
-    const j = JSON.parse(fs.readFileSync(WALLET, 'utf8'));
-    // si c'est un keypair JSON solana (array de 64 nombres) ça ne contient pas le pubkey
-    // donc on tombe dans le catch
+    JSON.parse(fs.readFileSync(WALLET, 'utf8'));
   } catch (e) {
     // ignore
   }
@@ -253,6 +254,7 @@ function buildSimulatedBatch() {
     dhtHum.points.length +
     dsSoilT.points.length +
     soilPct.points.length;
+
   const ts_min = Math.min(
     ...[dhtTemp, dhtHum, dsSoilT, soilPct].flatMap((s) => s.points.map((p) => p.t)),
   );
@@ -281,6 +283,7 @@ function buildSimulatedBatch() {
     shaLocal: sha,
     memoPayload: { cid: null, sha256: sha, count: flatCount, ts_min, ts_max },
     source: 'simulated',
+    pointsCount: flatCount,
   };
 }
 
@@ -310,7 +313,7 @@ function confirmTx(sig) {
 // ---- Main ----
 (async () => {
   const isSim = process.argv.includes('--sim');
-  let PATH_JSON, FNAME, SOURCE, shaLocal, memoPayload;
+  let PATH_JSON, FNAME, SOURCE, shaLocal, memoPayload, POINTS_COUNT = 0;
 
   if (isSim) {
     const sim = buildSimulatedBatch();
@@ -319,6 +322,10 @@ function confirmTx(sig) {
     SOURCE = sim.source;
     shaLocal = sim.shaLocal;
     memoPayload = sim.memoPayload;
+    POINTS_COUNT =
+      typeof sim.pointsCount === 'number' && Number.isFinite(sim.pointsCount)
+        ? sim.pointsCount
+        : 0;
   } else {
     PATH_JSON = process.argv[2] || newestBatch();
     FNAME = path.basename(PATH_JSON);
@@ -326,10 +333,15 @@ function confirmTx(sig) {
     shaLocal = sha256File(PATH_JSON);
 
     const batch = JSON.parse(fs.readFileSync(PATH_JSON, 'utf8'));
+    POINTS_COUNT =
+      typeof batch?.count === 'number' && Number.isFinite(batch.count)
+        ? batch.count
+        : 0;
+
     memoPayload = {
       cid: null,
       sha256: shaLocal,
-      count: batch.count || undefined,
+      count: POINTS_COUNT || undefined,
       ts_min: batch.ts_min,
       ts_max: batch.ts_max,
     };
@@ -367,17 +379,28 @@ function confirmTx(sig) {
   const receiptsDir = path.join(process.cwd(), 'receipts');
   fs.mkdirSync(receiptsDir, { recursive: true });
   const rPath = path.join(receiptsDir, `${Date.now()}-receipt.json`);
+
   const receipt = {
     cid,
     sha256: shaLocal,
     tx,
     file: FNAME,
     gw: GW,
+
+    // ✅ Ajouts M2
+    teamId: TEAM_ID || null,
+    team: TEAM_NAME || null,
     source: SOURCE,
+    sourceType: SOURCE,
+    pointsCount: POINTS_COUNT,
+    count: POINTS_COUNT,
+    points: POINTS_COUNT,
+
     ts: new Date().toISOString(),
     status: txInfo?.status || (tx ? 'submitted' : 'n/a'),
     slot: txInfo?.slot || null,
   };
+
   fs.writeFileSync(rPath, JSON.stringify(receipt, null, 2), 'utf8');
 
   console.log(
@@ -390,6 +413,9 @@ function confirmTx(sig) {
         sha256: shaLocal,
         tx,
         gw: GW,
+        teamId: TEAM_ID || null,
+        team: TEAM_NAME || null,
+        pointsCount: POINTS_COUNT,
         receipt: rPath,
       },
       null,
